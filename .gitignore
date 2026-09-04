@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 日志与运行产物
+logs/
+*.log
+*.pid
+
+# 平台凭据（防止误提交）
+config.local.yaml
+.env.local
+
+# 操作系统
+.DS_Store
+Thumbs.db

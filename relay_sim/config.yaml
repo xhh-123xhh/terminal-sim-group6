@@ -1,0 +1,74 @@
+# 8路继电器模拟器配置文件
+# JetLinks 协议 + Modbus TCP 对接
+
+# ============ 设备身份（必须在 JetLinks 平台预先创建）============
+device:
+  # JetLinks 平台给设备分配的 productId / deviceId
+  product_id: "relay-8ch-group6"
+  device_id: "relay-sim-group6-001"
+  # 设备认证密钥（JetLink 平台使用 secureKey 鉴权时需要）
+  secure_key: "group6-relay-sim-001"
+
+# ============ 继电器通道配置 ============
+channels:
+  count: 8                        # 通道数量
+  # Modbus 寄存器映射：8路继电器状态存在一个 16-bit 寄存器的低 8 位
+  modbus:
+    slave_id: 1                   # Modbus 从站地址
+    register_address: 6           # 起始寄存器地址（bit 字段，地址 0x0006）
+    register_count: 1             # 占 1 个寄存器（高字节保留，低 8 位为 8 个通道）
+    # 通道位掩码（bit 序号 = 通道序号 - 1）
+    bit_map:
+      "1": 0x0001
+      "2": 0x0002
+      "3": 0x0004
+      "4": 0x0008
+      "5": 0x0010
+      "6": 0x0020
+      "7": 0x0040
+      "8": 0x0080
+  # 通道默认值（启动初始状态）
+  initial_states: [0, 0, 0, 0, 0, 0, 0, 0]
+  # 是否允许外部通过 Modbus 写入改变状态（false=只接受 MQTT 命令）
+  allow_modbus_write: true
+
+# ============ Modbus TCP 从站 ============
+modbus_server:
+  host: "0.0.0.0"
+  port: 5502                      # 本地监听端口
+  framer: "socket"                # tcp socket
+  data_block_size: 100            # 内部数据块大小（覆盖 0x0000-0x0009 共 10 个）
+
+# ============ MQTT 客户端（JetLinks 协议）============
+mqtt:
+  broker: "172.16.4.211"
+  port: 9783
+  username: "test"
+  password: "123456"
+  client_id_prefix: "relay-sim"   # 实际 client_id = prefix + device_id
+  keepalive: 30
+  qos: 1
+  # JetLinks 主题模板（mqtt-client-gateway = MQTT Broker接入 默认协议）
+  # 实测在线设备使用 /{productId}/{deviceId}/properties/report 格式
+  topics:
+    property_post:  "/{product_id}/{device_id}/properties/report"        # 属性上报
+    event_post:     "/{product_id}/{device_id}/event/+/post"             # 事件上报
+    service_set:    "/{product_id}/{device_id}/properties/write"         # 属性写入命令(下行)
+    service_invoke: "/{product_id}/{device_id}/function/invoke"          # 功能调用(下行)
+    invoke_reply:   "/{product_id}/{device_id}/function/invoke/reply"    # 功能调用响应
+    set_reply:      "/{product_id}/{device_id}/properties/write/reply"   # 属性写入响应
+    online:         "/{product_id}/{device_id}/online"
+    offline:        "/{product_id}/{device_id}/offline"
+
+# ============ 状态上报配置 ============
+reporter:
+  interval_seconds: 5              # 定时上报周期
+  report_on_change: true          # 状态变化时立即上报
+  heartbeat_seconds: 30            # 平台心跳
+
+# ============ 日志配置 ============
+logger:
+  level: "INFO"                   # DEBUG/INFO/WARNING/ERROR
+  file: "logs/simulator.log"
+  max_bytes: 10485760             # 10MB
+  backup_count: 5
