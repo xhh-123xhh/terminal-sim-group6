@@ -1,0 +1,157 @@
+{
+  "id": "th_sensor_6",
+  "name": "温湿度传感器-第6组",
+  "description": "第6组温湿度传感器模拟终端 (main.py)。上报温度/湿度，支持设置上报周期、校准偏移、重置。",
+  "properties": [
+    {
+      "id": "temperature",
+      "name": "温度",
+      "description": "当前环境温度",
+      "valueType": {
+        "type": "double",
+        "min": 0,
+        "max": 100,
+        "step": 0.1,
+        "unit": "℃"
+      },
+      "expands": {
+        "readOnly": "true",
+        "report": "true"
+      }
+    },
+    {
+      "id": "humidity",
+      "name": "湿度",
+      "description": "当前环境相对湿度",
+      "valueType": {
+        "type": "double",
+        "min": 0,
+        "max": 100,
+        "step": 0.1,
+        "unit": "%RH"
+      },
+      "expands": {
+        "readOnly": "true",
+        "report": "true"
+      }
+    },
+    {
+      "id": "report_interval",
+      "name": "上报周期",
+      "description": "传感器数据上报间隔（秒），平台可下发修改",
+      "valueType": {
+        "type": "int",
+        "min": 1,
+        "max": 3600,
+        "step": 1,
+        "unit": "s"
+      },
+      "expands": {
+        "readOnly": "false",
+        "report": "true"
+      }
+    }
+  ],
+  "functions": [
+    {
+      "id": "set_report_interval",
+      "name": "设置上报周期",
+      "description": "修改模拟器上报周期，下发后立即生效",
+      "async": false,
+      "inputs": [
+        {
+          "id": "interval",
+          "name": "上报周期(秒)",
+          "valueType": {
+            "type": "int",
+            "min": 1,
+            "max": 3600,
+            "unit": "s"
+          }
+        }
+      ],
+      "output": {
+        "type": "boolean"
+      }
+    },
+    {
+      "id": "calibrate_offset",
+      "name": "校准偏移",
+      "description": "校准温度/湿度读数偏移，偏移量直接作用到当前值",
+      "async": false,
+      "inputs": [
+        {
+          "id": "temp_offset",
+          "name": "温度偏移(℃)",
+          "valueType": {
+            "type": "double",
+            "unit": "℃"
+          }
+        },
+        {
+          "id": "hum_offset",
+          "name": "湿度偏移(%RH)",
+          "valueType": {
+            "type": "double",
+            "unit": "%RH"
+          }
+        }
+      ],
+      "output": {
+        "type": "boolean"
+      }
+    },
+    {
+      "id": "reset",
+      "name": "重置模拟",
+      "description": "重置模拟器温湿度为随机初值",
+      "async": false,
+      "inputs": [],
+      "output": {
+        "type": "boolean"
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "alarm",
+      "name": "温湿度越限告警",
+      "description": "温度或湿度超出阈值时上报",
+      "valueType": {
+        "type": "object",
+        "properties": [
+          {
+            "id": "type",
+            "name": "告警类型",
+            "valueType": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "value",
+            "name": "当前值",
+            "valueType": {
+              "type": "double"
+            }
+          },
+          {
+            "id": "message",
+            "name": "告警信息",
+            "valueType": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "tags": [
+    {
+      "id": "location",
+      "name": "安装位置",
+      "valueType": {
+        "type": "string"
+      }
+    }
+  ]
+}

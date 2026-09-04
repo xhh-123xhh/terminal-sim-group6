@@ -54,7 +54,13 @@ terminal-sim-group6/
 │   ├── README.md
 │   ├── test_function_invoke.py    # MQTT 直发测试
 │   └── test_platform_invoke.py    # 平台 API 测试
-└── temp_humidity_sim/     # （待补）温湿度模拟器
+└── temp_humidity_sim/     # 温湿度传感器模拟器
+    ├── main.py
+    ├── config.json
+    ├── thing_model.json
+    ├── requirements.txt
+    ├── README.md
+    └── test_invoke.py      # MQTT 直发功能调用测试
 ```
 
 ## 开发流程与平台凭据

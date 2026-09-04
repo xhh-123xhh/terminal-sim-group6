@@ -1,0 +1,2 @@
+# 运行时依赖（核心功能）
+paho-mqtt>=2.0.0         # MQTT 客户端（JetLinks 协议通信）

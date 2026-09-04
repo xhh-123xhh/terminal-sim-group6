@@ -31,6 +31,9 @@ logs/
 config.local.yaml
 .env.local
 
+# 温湿度模拟器运行时状态文件（由 main.py 生成，不入库）
+temp_humidity_sim/sensor_data.json
+
 # 操作系统
 .DS_Store
 Thumbs.db

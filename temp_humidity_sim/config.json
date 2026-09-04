@@ -1,0 +1,41 @@
+{
+  "group_id": "group6",
+  "mqtt": {
+    "host": "172.16.4.211",
+    "port": 9783,
+    "keepalive": 60,
+    "qos": 1,
+    "auth_mode": "none",
+    "username": "test",
+    "password": "123456"
+  },
+  "devices": {
+    "sensor": {
+      "product_id": "th_sensor_6",
+      "device_id": "dev_th_6_01",
+      "secure_id": "REPLACE_WITH_DEVICE_SECURE_ID",
+      "secure_key": "REPLACE_WITH_DEVICE_SECURE_KEY"
+    }
+  },
+  "sensor": {
+    "json_file": "sensor_data.json",
+    "interval": 5,
+    "temp_range": [
+      18.0,
+      32.0
+    ],
+    "humidity_range": [
+      40.0,
+      80.0
+    ],
+    "deadband": 0.2,
+    "max_step": 0.5,
+    "alarm": {
+      "temp_min": 15.0,
+      "temp_max": 35.0,
+      "hum_min": 30.0,
+      "hum_max": 90.0,
+      "cooldown_cycles": 6
+    }
+  }
+}
