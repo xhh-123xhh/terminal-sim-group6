@@ -20,6 +20,12 @@ JetLinks 物联网平台官方物模型协议。
     password = md5(secureId | 毫秒时间戳 | secureKey)
 
 本地测试时把 mqtt.auth_mode 设为 "none" 即可连本地 EMQX 无认证 broker。
+
+校准设计 (重要):
+    模拟器内部维护「原始值」(raw) 与「校准偏移」(offset) 两个量:
+        显示值 = 原始值 + 偏移
+    随机游走只在「原始值」上跑，校准/重置只改「偏移」。
+    这样校准一次会持续生效，不会被下一次随机游走覆盖。
 """
 
 import hashlib
@@ -94,6 +100,9 @@ class SensorSimulatorJetLinks:
         self.h_min, self.h_max = scfg.get("humidity_range", [40.0, 80.0])
         self.deadband = scfg.get("deadband", 0.2)
         self.max_step = scfg.get("max_step", 0.5)
+        # 显示值的合法范围（对应物模型 valueType 的 min/max）
+        self.display_temp_range = scfg.get("display_temp_range", [0.0, 100.0])
+        self.display_hum_range = scfg.get("display_hum_range", [0.0, 100.0])
         alarm = scfg.get("alarm", {})
         self.alarm_cfg = {
             "temp_min": alarm.get("temp_min", 15.0),
@@ -118,10 +127,23 @@ class SensorSimulatorJetLinks:
         self.running = True
 
         state = self._load_state()
+        # 原始值（随机游走在此之上跑）
         self.temperature = state["temperature"]
         self.humidity = state["humidity"]
+        # 校准偏移（持久化，校准/重置只改这里）
+        self.temp_offset = state.get("temp_offset", 0.0)
+        self.hum_offset = state.get("hum_offset", 0.0)
 
         self.mqtt = None
+
+    # ---------- 显示值 = 原始值 + 偏移 ----------
+    def _display_temperature(self):
+        lo, hi = self.display_temp_range
+        return round(max(lo, min(hi, self.temperature + self.temp_offset)), 1)
+
+    def _display_humidity(self):
+        lo, hi = self.display_hum_range
+        return round(max(lo, min(hi, self.humidity + self.hum_offset)), 1)
 
     # ---------- JSON 持久化 ----------
     def _load_state(self):
@@ -132,12 +154,17 @@ class SensorSimulatorJetLinks:
                 return {
                     "temperature": float(data["temperature"]),
                     "humidity": float(data["humidity"]),
+                    # 兼容旧版无偏移字段的文件
+                    "temp_offset": float(data.get("temp_offset", 0.0)),
+                    "hum_offset": float(data.get("hum_offset", 0.0)),
                 }
             except Exception as e:
                 log.warning("JSON 状态文件损坏, 使用随机初值: %s", e)
         return {
             "temperature": round(random.uniform(self.t_min, self.t_max), 1),
             "humidity": round(random.uniform(self.h_min, self.h_max), 1),
+            "temp_offset": 0.0,
+            "hum_offset": 0.0,
         }
 
     def _save_state(self):
@@ -147,6 +174,8 @@ class SensorSimulatorJetLinks:
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "temperature": round(self.temperature, 1),
             "humidity": round(self.humidity, 1),
+            "temp_offset": round(self.temp_offset, 1),
+            "hum_offset": round(self.hum_offset, 1),
         }
         tmp = self.json_file + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -219,41 +248,85 @@ class SensorSimulatorJetLinks:
         else:
             log.info("忽略未知主题消息: %s", msg.topic)
 
-    def _handle_function_invoke(self, msg):
-        """平台功能调用:
-        兼容两种 inputs 结构:
-          平铺:    [{"id":"interval","value":30}]
-          嵌套:    [{"name":"params","value":[{"id":"interval","value":30}]}]
+    @staticmethod
+    def _parse_inputs(raw_inputs):
+        """兼容 JetLinks 平台多种 inputs 结构:
+          平铺(name 字段, 平台 API 实际下发):  [{"name":"temp_offset","value":2.0}]
+          平铺(id 字段, MQTT 直发):            [{"id":"interval","value":30}]
+          嵌套:                                [{"name":"params","value":[{"id":"interval","value":30}]}]
+        返回 {参数名: value} 字典。key 优先取 id，其次 name。
         """
+        if not raw_inputs:
+            return {}
+        if isinstance(raw_inputs[0], dict) and raw_inputs[0].get("name") == "params":
+            raw_inputs = raw_inputs[0].get("value") or []
+        result = {}
+        for i in raw_inputs:
+            if not isinstance(i, dict):
+                continue
+            key = i.get("id") or i.get("name")
+            if key is not None:
+                result[key] = i.get("value")
+        return result
+
+    @staticmethod
+    def _as_float(value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _as_int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _handle_function_invoke(self, msg):
+        """平台功能调用"""
         mid = msg.get("messageId")
         fid = msg.get("functionId")
-        raw_inputs = msg.get("inputs") or []
-        if raw_inputs and isinstance(raw_inputs[0], dict) and raw_inputs[0].get("name") == "params":
-            raw_inputs = raw_inputs[0].get("value") or []
-        inputs = {i.get("id"): i.get("value") for i in raw_inputs if isinstance(i, dict)}
+        inputs = self._parse_inputs(msg.get("inputs"))
         log.info("收到功能调用: %s inputs=%s", fid, inputs)
 
-        success, data = False, {"error": "unknown function: %s" % fid}
+        success, output = False, {}
         if fid == "set_report_interval":
-            v = max(1, int(inputs.get("interval", self.interval)))
+            v = max(1, self._as_int(inputs.get("interval"), self.interval))
             self.interval = v
-            success, data = True, {"interval": v}
+            success, output = True, {"interval": v}
         elif fid == "calibrate_offset":
-            self.temperature = round(max(self.t_min, min(self.t_max,
-                self.temperature + float(inputs.get("temp_offset", 0)))), 1)
-            self.humidity = round(max(self.h_min, min(self.h_max,
-                self.humidity + float(inputs.get("hum_offset", 0)))), 1)
+            # 只改偏移量，不改原始值 → 校准持久生效
+            new_t_offset = self._as_float(inputs.get("temp_offset"), 0.0)
+            new_h_offset = self._as_float(inputs.get("hum_offset"), 0.0)
+            self.temp_offset = round(self.temp_offset + new_t_offset, 1)
+            self.hum_offset = round(self.hum_offset + new_h_offset, 1)
             self._save_state()
-            success, data = True, {"temperature": self.temperature, "humidity": self.humidity}
+            success, output = True, {
+                "temperature": self._display_temperature(),
+                "humidity": self._display_humidity(),
+                "temp_offset": self.temp_offset,
+                "hum_offset": self.hum_offset,
+            }
+            log.info("校准偏移已更新: temp_offset=%+.1f hum_offset=%+.1f (显示值 %.1f°C / %.1f%%)",
+                     self.temp_offset, self.hum_offset,
+                     self._display_temperature(), self._display_humidity())
         elif fid == "reset":
             self.temperature = round(random.uniform(self.t_min, self.t_max), 1)
             self.humidity = round(random.uniform(self.h_min, self.h_max), 1)
+            self.temp_offset = 0.0
+            self.hum_offset = 0.0
             self._save_state()
-            success, data = True, {"temperature": self.temperature, "humidity": self.humidity}
+            success, output = True, {
+                "temperature": self._display_temperature(),
+                "humidity": self._display_humidity(),
+            }
+            log.info("已重置: 原始值=%.1f°C/%.1f%% 偏移清零", self.temperature, self.humidity)
         else:
             log.warning("未知功能: %s", fid)
 
-        self._reply(self.topic_fn_reply, mid, success, data)
+        self._reply_function(mid, fid, success, output,
+                             error=None if success else "unknown function: %s" % fid)
         if success:
             # 功能执行成功后立即补发一次属性上报,
             # 让平台能及时看到控制后的最新值(尤其 set_report_interval 这类不改数值的功能)
@@ -267,35 +340,60 @@ class SensorSimulatorJetLinks:
         mid = msg.get("messageId")
         props = msg.get("properties") or {}
         if isinstance(props, list):
-            props = {i.get("id"): i.get("value") for i in props if isinstance(i, dict)}
+            # 兼容 id / name 两种字段
+            parsed = {}
+            for i in props:
+                if isinstance(i, dict):
+                    key = i.get("id") or i.get("name")
+                    if key is not None:
+                        parsed[key] = i.get("value")
+            props = parsed
         applied = {}
         if "report_interval" in props:
-            self.interval = max(1, int(props["report_interval"]))
+            self.interval = max(1, self._as_int(props["report_interval"], self.interval))
             applied["report_interval"] = self.interval
+        # 平台直接写绝对值 → 视为「重新标定」，清除原有偏移
         if "temperature" in props:
-            self.temperature = round(float(props["temperature"]), 1)
-            applied["temperature"] = self.temperature
+            self.temperature = round(self._as_float(props["temperature"]), 1)
+            self.temp_offset = 0.0
+            applied["temperature"] = self._display_temperature()
         if "humidity" in props:
-            self.humidity = round(float(props["humidity"]), 1)
-            applied["humidity"] = self.humidity
+            self.humidity = round(self._as_float(props["humidity"]), 1)
+            self.hum_offset = 0.0
+            applied["humidity"] = self._display_humidity()
         if applied:
             self._save_state()
             log.info("属性修改已应用: %s", applied)
-        self._reply(self.topic_prop_write_reply, mid, True, applied)
+        self._reply_property_write(mid, True)
         if applied:
             self._publish_report(changed="after-write")
 
-    def _reply(self, topic, message_id, success, data):
-        if not message_id:
+    def _reply_function(self, mid, fid, success, output, error=None):
+        if not mid:
             return
         payload = {
-            "messageId": message_id,
+            "messageId": mid,
+            "functionId": fid,
+            "output": output,
             "success": success,
-            "data": data,
             "timestamp": int(time.time() * 1000),
         }
-        self.mqtt.publish(topic, json.dumps(payload, ensure_ascii=False), qos=1)
-        log.info("回复 %s | success=%s data=%s", topic, success, data)
+        if error:
+            payload["message"] = error
+        self.mqtt.publish(self.topic_fn_reply, json.dumps(payload, ensure_ascii=False), qos=1)
+        log.info("功能回复 -> %s | functionId=%s success=%s output=%s",
+                 self.topic_fn_reply, fid, success, output)
+
+    def _reply_property_write(self, mid, success):
+        if not mid:
+            return
+        payload = {
+            "messageId": mid,
+            "success": success,
+            "timestamp": int(time.time() * 1000),
+        }
+        self.mqtt.publish(self.topic_prop_write_reply, json.dumps(payload, ensure_ascii=False), qos=1)
+        log.info("属性写回复 -> %s | success=%s", self.topic_prop_write_reply, success)
 
     # ---------- 上报 ----------
     def _publish_report(self, changed):
@@ -304,34 +402,37 @@ class SensorSimulatorJetLinks:
             "messageId": str(uuid.uuid4()),
             "timestamp": int(time.time() * 1000),
             "properties": {
-                "temperature": round(self.temperature, 1),
-                "humidity": round(self.humidity, 1),
+                "temperature": self._display_temperature(),
+                "humidity": self._display_humidity(),
                 "report_interval": self.interval,
             },
         }
         info = self.mqtt.publish(self.topic_report, json.dumps(payload, ensure_ascii=False),
                                  qos=self.qos)
         log.info("属性上报 -> %s | 温度=%.1f 湿度=%.1f | 变化=%s (mid=%s)",
-                 self.topic_report, self.temperature, self.humidity, changed, info.mid)
+                 self.topic_report, self._display_temperature(), self._display_humidity(),
+                 changed, info.mid)
 
     def _check_alarm(self):
-        """温湿度越限检查, 冷却周期内只报一次"""
+        """温湿度越限检查(基于显示值), 冷却周期内只报一次"""
         self.alarm_cycle += 1
         if self.alarm_cycle % self.alarm_cfg["cooldown"] != 0:
             return
+        temp = self._display_temperature()
+        hum = self._display_humidity()
         alarms = []
-        if self.temperature > self.alarm_cfg["temp_max"]:
-            alarms.append(("temperature_high", self.temperature,
-                           "温度 %.1f℃ 超过上限 %.1f℃" % (self.temperature, self.alarm_cfg["temp_max"])))
-        elif self.temperature < self.alarm_cfg["temp_min"]:
-            alarms.append(("temperature_low", self.temperature,
-                           "温度 %.1f℃ 低于下限 %.1f℃" % (self.temperature, self.alarm_cfg["temp_min"])))
-        if self.humidity > self.alarm_cfg["hum_max"]:
-            alarms.append(("humidity_high", self.humidity,
-                           "湿度 %.1f%% 超过上限 %.1f%%" % (self.humidity, self.alarm_cfg["hum_max"])))
-        elif self.humidity < self.alarm_cfg["hum_min"]:
-            alarms.append(("humidity_low", self.humidity,
-                           "湿度 %.1f%% 低于下限 %.1f%%" % (self.humidity, self.alarm_cfg["hum_min"])))
+        if temp > self.alarm_cfg["temp_max"]:
+            alarms.append(("temperature_high", temp,
+                           "温度 %.1f℃ 超过上限 %.1f℃" % (temp, self.alarm_cfg["temp_max"])))
+        elif temp < self.alarm_cfg["temp_min"]:
+            alarms.append(("temperature_low", temp,
+                           "温度 %.1f℃ 低于下限 %.1f℃" % (temp, self.alarm_cfg["temp_min"])))
+        if hum > self.alarm_cfg["hum_max"]:
+            alarms.append(("humidity_high", hum,
+                           "湿度 %.1f%% 超过上限 %.1f%%" % (hum, self.alarm_cfg["hum_max"])))
+        elif hum < self.alarm_cfg["hum_min"]:
+            alarms.append(("humidity_low", hum,
+                           "湿度 %.1f%% 低于下限 %.1f%%" % (hum, self.alarm_cfg["hum_min"])))
         for atype, value, message in alarms:
             payload = {"type": atype, "value": round(value, 1), "message": message,
                        "timestamp": int(time.time() * 1000)}
@@ -344,12 +445,14 @@ class SensorSimulatorJetLinks:
         return max(lo, min(hi, value + step))
 
     def run(self):
-        log.info("传感器模拟器(JetLinks直连)启动: 产品=%s 设备=%s | 温度 %.1f°C / 湿度 %.1f%% | 周期 %ss",
-                 self.product_id, self.device_id, self.temperature, self.humidity, self.interval)
+        log.info("传感器模拟器(JetLinks直连)启动: 产品=%s 设备=%s | 显示值 %.1f°C / %.1f%% (偏移 %+.1f / %+.1f) | 周期 %ss",
+                 self.product_id, self.device_id,
+                 self._display_temperature(), self._display_humidity(),
+                 self.temp_offset, self.hum_offset, self.interval)
         self._connect()
         time.sleep(1)
 
-        last_t, last_h = self.temperature, self.humidity
+        last_t, last_h = self._display_temperature(), self._display_humidity()
         while self.running:
             # 断线重连(每次用新时间戳重新生成认证)
             if self.mqtt is None or not self.mqtt.is_connected():
@@ -364,19 +467,22 @@ class SensorSimulatorJetLinks:
             if not self.running:
                 break
 
+            # 随机游走只作用于「原始值」
             self.temperature = round(self._random_walk(self.temperature, self.t_min, self.t_max), 1)
             self.humidity = round(self._random_walk(self.humidity, self.h_min, self.h_max), 1)
             self._save_state()
             self._check_alarm()
 
+            # 死区判断基于「显示值」
+            cur_t, cur_h = self._display_temperature(), self._display_humidity()
             changed = []
-            if abs(self.temperature - last_t) >= self.deadband:
+            if abs(cur_t - last_t) >= self.deadband:
                 changed.append("temperature")
-            if abs(self.humidity - last_h) >= self.deadband:
+            if abs(cur_h - last_h) >= self.deadband:
                 changed.append("humidity")
             if changed:
                 self._publish_report(changed)
-                last_t, last_h = self.temperature, self.humidity
+                last_t, last_h = cur_t, cur_h
 
         self._teardown()
         log.info("模拟器已退出, 最终状态已保存到 %s", self.json_file)

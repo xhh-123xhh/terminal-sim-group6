@@ -113,18 +113,23 @@ python main.py
 ```json
 {
   "messageId": "xxx",
-  "functionId": "set_report_interval",
-  "inputs": [{"id": "interval", "value": 30}]
+  "functionId": "calibrate_offset",
+  "inputs": [{"name": "temp_offset", "value": 2.0}, {"name": "hum_offset", "value": -3.0}]
 }
 ```
 
-模拟器回复（`function/invoke/reply`）：
+> **关键坑**：平台 API/UI 实际下发的 `inputs` 用的是 **`name` 字段**（`{"name":"temp_offset","value":2.0}`），
+> 而不是 `id` 字段。模拟器已同时兼容 `name` / `id` / 嵌套 `params` 三种结构；
+> 若只按 `id` 解析会导致参数全部取默认值（校准量=0，看似"没生效"）。
+
+模拟器回复（`function/invoke/reply`，注意字段是 `output` 而非 `data`）：
 
 ```json
 {
   "messageId": "xxx",
+  "functionId": "set_report_interval",
+  "output": {"interval": 30},
   "success": true,
-  "data": {"interval": 30},
   "timestamp": 1700000000000
 }
 ```
@@ -136,8 +141,12 @@ python main.py
 | 功能 ID | 说明 | 输入参数 |
 | --- | --- | --- |
 | `set_report_interval` | 设置上报周期（秒） | `interval` (int) |
-| `calibrate_offset` | 校准温度/湿度偏移 | `temp_offset` (double), `hum_offset` (double) |
-| `reset` | 重置温湿度为随机初值 | 无 |
+| `calibrate_offset` | 校准温度/湿度偏移（**偏移量持久累加**，作用于显示值） | `temp_offset` (double), `hum_offset` (double) |
+| `reset` | 重置温湿度为随机初值，**并清零偏移** | 无 |
+
+> **校准语义**：模拟器内部维护「原始值(raw)」与「偏移(offset)」，`显示值 = 原始值 + 偏移`。
+> 随机游走只改原始值，校准只改偏移，所以**校准一次会持续生效**，不会被下一轮随机游走覆盖；
+> 偏移量随状态一起持久化到 `sensor_data.json`，重启后不丢失。
 
 ### 平台 API 调用
 
@@ -147,10 +156,15 @@ curl -X POST "http://172.16.4.211:8848/device/instance/dev_th_6_01/function/set_
   -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"interval": 10}'
 
-# 校准偏移
+# 校准偏移（相对当前值累加：温度 +1.0℃、湿度 -2.0%RH，偏移持久生效）
 curl -X POST "http://172.16.4.211:8848/device/instance/dev_th_6_01/function/calibrate_offset" \
   -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"temp_offset": 1.0, "hum_offset": -2.0}'
+
+# 重置（温湿度回随机初值，偏移清零）
+curl -X POST "http://172.16.4.211:8848/device/instance/dev_th_6_01/function/reset" \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{}'
 ```
 
 > 注意：平台 API 的 body 是**参数 map**（`{"interval": 10}`）；MQTT 直发时才是 `inputs` 数组。
