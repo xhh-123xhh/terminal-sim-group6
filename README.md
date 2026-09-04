@@ -9,7 +9,7 @@
 | 子目录 | 功能 |
 | --- | --- |
 | [`relay_sim/`](./relay_sim/) | 8 路继电器模拟器：Modbus TCP 从站 + JetLinks MQTT 协议，上报属性、响应平台命令 |
-| `temp_humidity_sim/` | （待补）温湿度传感器模拟器 |
+| [`temp_humidity_sim/`](./temp_humidity_sim/) | 温湿度传感器模拟器：随机游走算法 + JSON 持久化 + JetLinks MQTT 协议上报，含 3 个功能调用（设置周期 / 校准 / 重置）与越限告警事件 |
 
 > 仓库采用扁平结构，每个子目录是一个**独立可运行**的项目：各自有 `main.py` / 入口、`requirements.txt`、`README.md`。
 
